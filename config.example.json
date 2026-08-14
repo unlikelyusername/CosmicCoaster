@@ -1,0 +1,11 @@
+{
+  "model": "cosmic",
+  "networks": [
+    { "ssid": "SSIDMAIN",  "password": "Password1" },
+    { "ssid": "SSIDALT", "password": "Password2"  }
+  ],
+  "timeout": 20,
+  "utc_offset": -4,
+  "ntp_host": "pool.ntp.org",
+  "brightness": 0.5
+}

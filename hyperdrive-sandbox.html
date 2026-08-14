@@ -1,0 +1,650 @@
+<title>Hyperdrive Sandbox</title>
+<style>
+  :root{ --ink:#DCE4EC; --dim:#78848F; --accent:#4FD1C5; --edge:#2A333D; }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; }
+  body{ margin:0; background:#000; color:var(--ink); overflow:hidden;
+        font:13px/1.4 ui-sans-serif,-apple-system,"Helvetica Neue",sans-serif; }
+
+  canvas{ position:fixed; inset:0; width:100vw; height:100vh; display:block;
+          background:#000; image-rendering:pixelated; image-rendering:crisp-edges; }
+  body.square canvas{ width:min(100vw,100vh); height:min(100vw,100vh);
+                      inset:auto; top:50%; left:50%; transform:translate(-50%,-50%); }
+
+  /* readouts, top left, deliberately quiet */
+  #stat{ position:fixed; top:0; left:0; padding:.7rem .9rem; z-index:3;
+         font-family:ui-monospace,Menlo,monospace; font-size:10.5px;
+         letter-spacing:.03em; color:var(--dim); pointer-events:none;
+         display:flex; gap:1rem; flex-wrap:wrap; text-shadow:0 1px 3px #000; }
+  #stat b{ color:var(--accent); font-weight:600; font-variant-numeric:tabular-nums; }
+
+  /* control overlay */
+  #hud{ position:fixed; left:0; right:0; bottom:0; z-index:4;
+        padding:2.6rem .9rem .7rem;
+        background:linear-gradient(transparent,rgba(0,0,0,.72) 42%,rgba(0,0,0,.86));
+        -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+        display:flex; flex-wrap:wrap; align-items:flex-end; gap:.5rem 1.1rem;
+        transition:opacity .5s ease; }
+  body.idle #hud, body.idle #stat{ opacity:.08; }
+
+  .grp{ display:flex; gap:.75rem; align-items:flex-end; }
+  .grp + .grp{ border-left:1px solid var(--edge); padding-left:1.1rem; }
+
+  .ctl{ position:relative; width:74px; display:flex; flex-direction:column; gap:2px; }
+  .ctl .k{ display:flex; justify-content:space-between; align-items:baseline;
+           font-family:ui-monospace,Menlo,monospace; font-size:9px;
+           letter-spacing:.09em; text-transform:uppercase; color:var(--dim); }
+  .ctl .k b{ color:var(--accent); font-weight:600; font-size:10px;
+             font-variant-numeric:tabular-nums; }
+  input[type=range]{ width:100%; height:14px; margin:0; accent-color:var(--accent);
+                     background:transparent; cursor:pointer; }
+
+  select,button{ background:rgba(255,255,255,.05); color:var(--ink);
+                 border:1px solid var(--edge); border-radius:4px;
+                 padding:.3rem .5rem; font:inherit; font-size:11px; cursor:pointer; }
+  select{ max-width:132px; }
+  button:hover,select:hover{ border-color:var(--accent); color:var(--accent); }
+
+  .pill{ font-family:ui-monospace,Menlo,monospace; font-size:9.5px;
+         letter-spacing:.08em; text-transform:uppercase; padding:.34rem .5rem;
+         border-radius:99px; opacity:.45; position:relative; }
+  .pill.on{ opacity:1; border-color:var(--accent); color:var(--accent);
+            background:rgba(79,209,197,.12); }
+
+  /* hover explanations — the only long text in the page */
+  [data-tip]{ position:relative; }
+  [data-tip]:hover::after{
+    content:attr(data-tip); position:absolute; bottom:calc(100% + 9px); left:50%;
+    transform:translateX(-50%); width:224px; padding:.5rem .6rem;
+    background:#0C1015; border:1px solid var(--edge); border-radius:5px;
+    font-family:ui-sans-serif,sans-serif; font-size:11px; line-height:1.45;
+    letter-spacing:0; text-transform:none; color:var(--ink);
+    box-shadow:0 6px 22px rgba(0,0,0,.65); z-index:20; pointer-events:none; }
+  #hud > .grp:first-child [data-tip]:hover::after{ left:0; transform:none; }
+  #hud > .grp:last-child [data-tip]:hover::after{ left:auto; right:0; transform:none; }
+</style>
+
+<canvas id="cv" width="32" height="32"></canvas>
+
+<div id="stat">
+  <span>FPS <b id="rFps">–</b></span>
+  <span>MS <b id="rMs">–</b></span>
+  <span>SEG <b id="rSeg">–</b></span>
+  <span>LIT <b id="rLit">–</b></span>
+  <span>STREAK <b id="rSpan">–</b></span>
+  <span>LIFE <b id="rLife">–</b></span>
+  <span>RAM <b id="rMem">–</b></span>
+  <span>FOCAL <b id="rFocal">–</b></span>
+  <span>RESERVE <b id="rReserve">–</b></span>
+  <span>ASPECT <b id="rAspect">–</b></span>
+  <span><b id="rPal">–</b></span>
+  <span id="rEvent" style="color:#E2A05C"></span>
+</div>
+
+<div id="hud">
+
+  <div class="grp">
+    <div class="ctl" data-tip="Number of stars. One of only two dials that costs real framerate — the cost is linear.">
+      <div class="k">Stars <b id="vStars">360</b></div>
+      <input type="range" id="stars" min="60" max="900" step="20" value="360"></div>
+    <div class="ctl" data-tip="Points per trail. The other real cost. Buys curve resolution through a bank, not trail length.">
+      <div class="k">Trail <b id="vTrail">16</b></div>
+      <input type="range" id="trail" min="4" max="48" step="2" value="16"></div>
+  </div>
+
+  <div class="grp">
+    <div class="ctl" data-tip="How often a position is frozen into the ring. Trail duration = trail points x this. Free: the raster pays per point, not per millisecond.">
+      <div class="k">Sample <b id="vCommit">180</b></div>
+      <input type="range" id="commit" min="40" max="500" step="10" value="180"></div>
+    <div class="ctl" data-tip="Camera speed forward, in world z per 33ms reference frame. Lengthens streaks by covering ground, and shortens how long each star lives.">
+      <div class="k">Speed <b id="vSpeed">.035</b></div>
+      <input type="range" id="speed" min="5" max="200" step="1" value="35"></div>
+    <div class="ctl" data-tip="How hard roll follows yaw rate. This is the coordinated turn — the whole field rolling into a bank is the strongest flight cue.">
+      <div class="k">Bank <b id="vBank">1.9</b></div>
+      <input type="range" id="bank" min="0" max="50" step="1" value="19"></div>
+  </div>
+
+  <div class="grp">
+    <div class="ctl" data-tip="Zoom: world units across the screen per unit of depth. Resolution-independent form of _FOCAL, which on the Pico is in pixels.">
+      <div class="k">View <b id="vFocal">1.33</b></div>
+      <input type="range" id="focal" min="40" max="400" step="5" value="133"></div>
+    <div class="ctl" data-tip="How wide stars are seeded. Cone divided by view width is how much field sits off-screen as reserve to bank into. Raising it thins the visible field without zooming out.">
+      <div class="k">Cone <b id="vCone">2.5</b></div>
+      <input type="range" id="cone" min="10" max="45" step="1" value="25"></div>
+    <div class="ctl" data-tip="Render resolution of the short screen axis. 32 is the Cosmic. 480 is the Presto and SQUiXL — where the 1px stroke goes hairline.">
+      <div class="k">Res <b id="vRes">32</b></div>
+      <input type="range" id="res" min="16" max="480" step="16" value="32"></div>
+  </div>
+
+  <div class="grp">
+    <select id="recipe" data-tip="A recipe is a rule that generates a whole ramp from one random base hue. Every one ends at black, because the tail is the end that gets retired."></select>
+    <button id="nextpal" data-tip="Generate a new palette from the selected recipe.">Roll</button>
+    <select id="pal" data-tip="The five hand-authored palettes. Used when the recipe is set to Authored."></select>
+  </div>
+
+  <div class="grp">
+    <div class="ctl" data-tip="0 uses the palette. Above 0 replaces it with a pure hue sweep going this many times around the colour wheel across one ramp.">
+      <div class="k">Revs <b id="vRevs">0</b></div>
+      <input type="range" id="revs" min="0" max="16" step="1" value="0"></div>
+    <div class="ctl" data-tip="How far apart stars sit in the gradient when per-star phase is on. 1.0 spreads them across the whole ramp.">
+      <div class="k">Spread <b id="vSpread">1.00</b></div>
+      <input type="range" id="spread" min="0" max="100" step="5" value="100"></div>
+    <div class="ctl" data-tip="Scrolls the whole gradient over time, so colour flows along every trail at once.">
+      <div class="k">Drift <b id="vDrift">0</b></div>
+      <input type="range" id="drift" min="0" max="200" step="5" value="0"></div>
+    <div class="ctl" data-tip="How much of the ramp is forced down to black at the tail, so the point being retired was already invisible.">
+      <div class="k">Fade <b id="vFade">40</b></div>
+      <input type="range" id="fade" min="0" max="120" step="4" value="40"></div>
+  </div>
+
+  <div class="grp">
+    <button class="pill on" id="freeze" data-tip="ON: only the live head rotates, history is frozen, so banking curves the trails. OFF is the original bug — the whole ring rotates together and every trail is dead straight no matter how hard you turn.">Curve</button>
+    <button class="pill on" id="slide" data-tip="Clip the tail vertex continuously instead of dropping a whole segment at each commit. OFF brings back the pop.">Slide</button>
+    <button class="pill on" id="stagger" data-tip="Split stars into 8 groups committing at spread phases. OFF makes the entire field retire a slot on the same frame — the most visible arrangement possible.">Stagger</button>
+    <button class="pill on" id="additive" data-tip="Crossing trails sum toward white. This is the effect, not overhead. OFF is opaque: cheaper per pixel, but no painting with light.">Add</button>
+    <button class="pill" id="perstar" data-tip="Give each star its own offset into the gradient. With many hue revolutions this is what makes the field full-spectrum while each streak still spans a short, clean arc.">Per-star</button>
+    <button class="pill on" id="autopal" data-tip="Roll a new palette every 6-10s, the way the Pico's _mutate() swaps them.">Auto</button>
+    <button class="pill" id="square" data-tip="Letterbox to a square, matching the Cosmic's 1:1 panel. Off fills the window, which is more immersive but no longer panel-accurate.">1:1</button>
+    <button id="reset" data-tip="Reseed the whole starfield.">Reseed</button>
+  </div>
+
+</div>
+
+<script>
+"use strict";
+const cv = document.getElementById('cv');
+const gl = cv.getContext('webgl', { antialias:false, alpha:false,
+                                    preserveDrawingBuffer:false });
+if (!gl) { document.body.innerHTML = '<p style="color:#E2A05C">WebGL unavailable.</p>'; }
+
+/* ---------- shader: clip-space position + vertex colour, additive ---------- */
+function sh(type, src){ const s=gl.createShader(type); gl.shaderSource(s,src);
+  gl.compileShader(s); return s; }
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER,
+  'attribute vec2 p; attribute vec3 c; varying vec3 vc;' +
+  'void main(){ vc=c; gl_Position=vec4(p,0.,1.); gl_PointSize=1.; }'));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER,
+  'precision mediump float; varying vec3 vc; void main(){ gl_FragColor=vec4(vc,1.); }'));
+gl.linkProgram(prog); gl.useProgram(prog);
+const aP = gl.getAttribLocation(prog,'p'), aC = gl.getAttribLocation(prog,'c');
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.enableVertexAttribArray(aP); gl.enableVertexAttribArray(aC);
+gl.vertexAttribPointer(aP, 2, gl.FLOAT, false, 20, 0);
+gl.vertexAttribPointer(aC, 3, gl.FLOAT, false, 20, 8);
+gl.enable(gl.BLEND);
+let glCap = 0;
+
+/* ---------- gradient: HSV interpolation, with the black-hue fix ---------- */
+function rgb2hsv(r,g,b){
+  const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+  if(mx===0) return [0,0,0];
+  const s=(mx-mn)/mx, v=mx/255;
+  if(mx===mn) return [0,s,v];
+  const d=mx-mn; let h;
+  if(mx===r) h=(g-b)/d; else if(mx===g) h=2+(b-r)/d; else h=4+(r-g)/d;
+  return [((h*60)%360+360)%360, s, v];
+}
+function hsv2rgb(h,s,v){
+  if(s===0){ const c=v*255; return [c,c,c]; }
+  const hi=Math.floor(h/60)%6, f=h/60-Math.floor(h/60);
+  const p=v*(1-s), q=v*(1-f*s), t=v*(1-(1-f)*s);
+  let r,g,b;
+  if(hi===0){r=v;g=t;b=p;} else if(hi===1){r=q;g=v;b=p;}
+  else if(hi===2){r=p;g=v;b=t;} else if(hi===3){r=p;g=q;b=v;}
+  else if(hi===4){r=t;g=p;b=v;} else {r=v;g=p;b=q;}
+  return [r*255,g*255,b*255];
+}
+function sample(stops,pos){
+  if(pos<=stops[0][0]) return stops[0].slice(1);
+  if(pos>=stops[stops.length-1][0]) return stops[stops.length-1].slice(1);
+  let i=0; for(;i<stops.length-1;i++){ if(stops[i][0]<=pos&&pos<=stops[i+1][0]) break; }
+  const p0=stops[i][0], p1=stops[i+1][0], t=p1>p0?(pos-p0)/(p1-p0):0;
+  let [h0,s0,v0]=rgb2hsv(stops[i][1],stops[i][2],stops[i][3]);
+  let [h1,s1,v1]=rgb2hsv(stops[i+1][1],stops[i+1][2],stops[i+1][3]);
+  // achromatic endpoints have no hue; black has no saturation either
+  const d0=v0===0, d1=v1===0, f0=d0||s0===0, f1=d1||s1===0;
+  if(f0&&!f1){ h0=h1; if(d0) s0=s1; } else if(f1&&!f0){ h1=h0; if(d1) s1=s0; }
+  const dh=((h1-h0+180)%360+360)%360-180;
+  return hsv2rgb((h0+dh*t+360)%360, s0+(s1-s0)*t, v0+(v1-v0)*t);
+}
+// gradient.random_palette() ported: a random base hue plus a colour-theory
+// scheme. The Python version appends a loop-closing stop so cycling effects
+// wrap seamlessly; a trail is a ramp not a cycle, so it is omitted here for
+// the same reason hyperdrive strips it.
+const SCHEMES = {
+  analogous:     [0,25,50,25],
+  complementary: [0,180],
+  triadic:       [0,120,240],
+  split:         [0,150,210],
+  tetradic:      [0,90,180,270],
+};
+function randomPalette(){
+  const names=Object.keys(SCHEMES);
+  const name=names[(Math.random()*names.length)|0], offs=SCHEMES[name];
+  const h0=Math.random()*360, n=offs.length, stops=[];
+  for(let i=0;i<n;i++){
+    const c=hsv2rgb((h0+offs[i])%360, 0.75+Math.random()*0.25, 0.70+Math.random()*0.30);
+    stops.push([Math.floor(i*255/n), c[0]|0, c[1]|0, c[2]|0]);
+  }
+  return [stops, name+' h'+(h0|0)];
+}
+// The pre-fix HSV interpolation, reproduced deliberately. Fading a colour
+// into black used to sweep hue toward red (black reported h=0) while
+// saturation and value collapsed, so a trail gained a warm bloom mid-ramp and
+// a red ember near the tail — like something hot cooling down. As an accident
+// it only fired when an endpoint happened to be black and could not be aimed;
+// as a generator it is tunable and survives the corrected interpolation.
+// ---------------------------------------------------------------------
+// PALETTE RECIPES — rules that generate a ramp from one base hue.
+// Every recipe returns gradient stops running head (0) to tail (255), and
+// every one ends dark, because these colour a trail: the tail is the end
+// that gets retired and must not blink when it goes.
+// ---------------------------------------------------------------------
+const _st = (pos,h,sat,val) => { const c=hsv2rgb(((h%360)+360)%360,sat,val);
+  return [pos, c[0]|0, c[1]|0, c[2]|0]; };
+
+const RECIPES = {
+  // White-hot core, a fast dive into one saturated hue, then a long fade.
+  // The classic incandescent look: the head reads as heat, not colour.
+  'white-hot': h => [
+    [0,255,255,255], _st(22,h,0.30,1.0), _st(58,h,0.85,1.0),
+    _st(110,h,1.0,0.80), _st(180,h,1.0,0.40), _st(255,h,1.0,0.0)
+  ],
+  // The old HSV interpolation artifact, on purpose: hue swings toward red
+  // as value falls, so the middle blooms warm and the tail leaves an ember.
+  'ember': h => { const n=7, out=[];
+    for(let i=0;i<n;i++){ const t=i/(n-1);
+      out.push(_st(Math.round(t*255), h+((360-(h%360))%360)*t, 1-0.6*t, 1-t*t)); }
+    return out; },
+  // A base hue plus colour-theory partners, with brightness forced to
+  // descend so it still works as a trail rather than a cycle.
+  'harmony': h => { const names=Object.keys(SCHEMES);
+    const offs=SCHEMES[names[(Math.random()*names.length)|0]], n=offs.length, out=[];
+    for(let i=0;i<n;i++){ const t=i/n;
+      out.push(_st(Math.round(t*255), h+offs[i], 0.80+Math.random()*0.20, 1-t*0.75)); }
+    out.push(_st(255,h+offs[n-1],1,0)); return out; },
+  // Two contrasting hues meeting mid-trail — the most legible recipe at
+  // 32x32, because the eye reads a hue CHANGE far more easily than a ramp.
+  'duotone': h => { const h2=h+150+Math.random()*60; return [
+    _st(0,h,0.55,1.0), _st(60,h,1.0,0.95), _st(140,h2,1.0,0.75),
+    _st(200,h2,1.0,0.35), _st(255,h2,1.0,0.0)]; },
+  // Cool-to-hot across the ramp regardless of base hue: blue core, amber
+  // body, red tail. Reads as temperature rather than as a colour choice.
+  'blackbody': h => [
+    [0,255,255,255], _st(30,210,0.45,1.0), _st(90,45,0.95,1.0),
+    _st(165,20,1.0,0.65), _st(220,0,1.0,0.28), _st(255,0,1.0,0.0)],
+};
+const RECIPE_NAMES = Object.keys(RECIPES);
+
+const PALETTES = {
+  'Deep space blue': [[0,255,255,255],[48,140,200,255],[160,30,60,200],[255,0,0,24]],
+  'Matrix green':    [[0,220,255,230],[56,80,255,120],[255,0,32,0]],
+  'Nebula purple':   [[0,255,240,255],[64,255,90,255],[255,28,0,44]],
+  'Warp amber':      [[0,255,255,210],[64,255,190,70],[255,48,8,0]],
+  'Deep red':        [[0,255,230,230],[56,255,60,110],[255,36,0,8]],
+};
+const LUTN = 1024;               // deep enough for many hue revolutions
+let LUT = new Float32Array(LUTN*3);
+let curStops=null, curName='';
+function bakeLUT(){
+  const revs = +el.revs.value;
+  const stops = curStops || PALETTES[el.pal.value];
+  const nf = (+el.fade.value) * LUTN / 256;
+  for(let i=0;i<LUTN;i++){
+    let c;
+    if(revs>0){
+      // pure hue sweep, `revs` times around the wheel across one ramp
+      c = hsv2rgb((i/LUTN*360*revs)%360, 1, 1);
+    } else {
+      c = sample(stops, i*255/(LUTN-1));
+    }
+    let k = 1;
+    if(nf>0 && i>=LUTN-nf) k = (LUTN-1-i)/nf;
+    if(k<0) k=0;
+    LUT[i*3]=c[0]*k/255; LUT[i*3+1]=c[1]*k/255; LUT[i*3+2]=c[2]*k/255;
+  }
+  document.getElementById('rPal').textContent =
+    (+el.revs.value>0) ? ('spectrum x'+el.revs.value) : (curName || el.pal.value);
+}
+function pickPalette(){
+  const mode = el.recipe.value;
+  if(mode==='Authored palettes'){
+    const keys=Object.keys(PALETTES);
+    const nx=(keys.indexOf(el.pal.value)+1)%keys.length;
+    el.pal.value=keys[nx]; curStops=null; curName='';
+  } else {
+    const name = (mode==='Any recipe')
+      ? RECIPE_NAMES[(Math.random()*RECIPE_NAMES.length)|0] : mode;
+    const h = Math.random()*360;
+    curStops = RECIPES[name](h);
+    curName = name+' h'+(h|0);
+  }
+  bakeLUT();
+}
+
+/* ---------- controls ---------- */
+const el = {};
+['stars','trail','commit','speed','cone','focal','bank','fade','res','pal',
+ 'freeze','slide','stagger','additive','reset','autopal','nextpal',
+ 'revs','perstar','spread','drift','recipe','square'].forEach(k=>el[k]=document.getElementById(k));
+Object.keys(PALETTES).forEach(k=>{ const o=document.createElement('option');
+  o.textContent=k; el.pal.appendChild(o); });
+['Any recipe','Authored palettes'].concat(RECIPE_NAMES).forEach(k=>{
+  const o=document.createElement('option'); o.textContent=k; el.recipe.appendChild(o); });
+
+const missing = Object.keys(el).filter(k=>!el[k]);
+if(missing.length){
+  const w=document.createElement('div');
+  w.style.cssText='position:fixed;top:40%;left:0;right:0;text-align:center;'+
+    'color:#E2A05C;font-family:ui-monospace,monospace;font-size:13px;z-index:99';
+  w.textContent='missing control(s): '+missing.join(', ');
+  document.body.appendChild(w);
+}
+
+const P = {};
+const on = id => !!el[id] && el[id].classList.contains('on');
+['freeze','slide','stagger','additive','perstar','autopal','square'].forEach(id=>{
+  if(!el[id]) return;
+  el[id].addEventListener('click', ()=>{
+    el[id].classList.toggle('on');
+    if(id==='square') document.body.classList.toggle('square');
+    readControls(); bakeLUT();
+  });
+});
+function readControls(){
+  P.stars=+el.stars.value; P.trail=+el.trail.value; P.commit=+el.commit.value;
+  P.speed=+el.speed.value/1000; P.cone=+el.cone.value/10; P.view=+el.focal.value/100;
+  P.bank=+el.bank.value/10; P.res=+el.res.value;
+  P.freeze=on('freeze'); P.slide=on('slide');
+  P.stagger=on('stagger'); P.additive=on('additive');
+  document.getElementById('vStars').textContent=P.stars;
+  document.getElementById('vTrail').textContent=P.trail;
+  document.getElementById('vCommit').textContent=P.commit+' ms';
+  document.getElementById('vSpeed').textContent=P.speed.toFixed(3);
+  document.getElementById('vCone').textContent=P.cone.toFixed(1);
+  document.getElementById('vFocal').textContent=P.view.toFixed(2);
+  document.getElementById('vBank').textContent=P.bank.toFixed(1);
+  document.getElementById('vFade').textContent=el.fade.value;
+  document.getElementById('vRevs').textContent=el.revs.value;
+  P.perstar=on('perstar'); P.spread=+el.spread.value/100;
+  P.drift=+el.drift.value;
+  document.getElementById('vSpread').textContent=P.spread.toFixed(2);
+  document.getElementById('vDrift').textContent=P.drift;
+  document.getElementById('vRes').textContent=P.res;
+  // the render target follows the window aspect; `res` is the SHORT axis, so
+  // the field of view is the same whatever shape the window happens to be
+  const vw=innerWidth||1, vh=innerHeight||1;
+  if(on('square')){ P.rw=P.rh=P.res; }
+  else if(vw>=vh){ P.rw=Math.max(2,Math.round(P.res*vw/vh/2)*2); P.rh=P.res; }
+  else            { P.rh=Math.max(2,Math.round(P.res*vh/vw/2)*2); P.rw=P.res; }
+  // focal is in PIXELS, so it must scale with resolution or the field of view
+  // changes when you change resolution instead of just resolving it better
+  P.focal = (Math.min(P.rw,P.rh)/2) / P.view;
+  P.aspect = P.rw / P.rh;
+  document.getElementById('rFocal').textContent=P.focal.toFixed(1)+' px';
+  document.getElementById('rReserve').textContent=
+    (P.cone/P.view).toFixed(2)+'x';
+  document.getElementById('rAspect').textContent=P.aspect.toFixed(2)+':1';
+  const secs = P.trail*P.commit/1000;
+  document.getElementById('rSpan').textContent=
+    secs.toFixed(1)+'s / '+(secs*1000/33*P.speed).toFixed(1)+' units';
+  document.getElementById('rLife').textContent=
+    ((15-0.08)/P.speed*33/1000).toFixed(0)+'s';
+  document.getElementById('rMem').textContent=
+    Math.round(P.stars*P.trail*12/1024)+' KB';
+}
+
+/* ---------- field state ---------- */
+const Z_NEAR=0.08, Z_FAR=15, Z_SPAWN_LO=10, DIM_K=600, DIM_MIN=18;
+const REF_MS=33, STIFF=0.020, DAMP=0.88, LN_DAMP=Math.log(DAMP);
+const YAW_AMP=0.011, PITCH_AMP=0.0075, ROLL_AMP=0.004;
+const GF_K=6.0, GF_MIN=0.6, GROUPS=8;
+let rings, tails, heads, bright, nStars, nTrail;
+let yawR=0,pitchR=0,rollR=0, yawV=0,pitchV=0,rollV=0, impY=0,impP=0;
+let ph=[0,0,0,0,0], speedCur, speedTgt, commitAcc=0, slidePrev=0;
+let warpUntil=0, nextMut=0, nextImp=0, nextCluster=0, clusterUntil=0;
+let clusterCx=0, clusterCy=0, clusterOn=false, eventLabel='';
+
+function resetStar(i, spread01){
+  const z = spread01 ? (Z_NEAR+0.5 + Math.random()*(Z_FAR-Z_NEAR-0.5))
+                     : (Z_SPAWN_LO + Math.random()*(Z_FAR-Z_SPAWN_LO));
+  // The spawn volume is a pyramid matched to the view frustum's aspect, not
+  // a square. `cone` is measured against the SHORT axis, exactly like view
+  // width, so cone/view is the off-screen reserve on both axes at once. A
+  // square spawn on a 16:9 window starves the sides (visible reaches
+  // x/z = view*1.78) while wasting most of what it seeds above and below.
+  const spx = z*P.cone*P.aspect, spy = z*P.cone;
+  let x, y;
+  if(clusterOn && Math.random()<0.6){
+    x=clusterCx*spx+(Math.random()*2-1)*spx*0.22;
+    y=clusterCy*spy+(Math.random()*2-1)*spy*0.22;
+  } else { x=(Math.random()*2-1)*spx; y=(Math.random()*2-1)*spy; }
+  const b=i*nTrail*3;
+  for(let k=0;k<nTrail;k++){ rings[b+k*3]=x; rings[b+k*3+1]=y; rings[b+k*3+2]=z; }
+  tails[i*3]=x; tails[i*3+1]=y; tails[i*3+2]=z;
+  heads[i]=0; bright[i]=DIM_MIN/255;
+}
+function buildField(){
+  nStars=P.stars; nTrail=P.trail;
+  rings=new Float32Array(nStars*nTrail*3);
+  tails=new Float32Array(nStars*3);
+  heads=new Int32Array(nStars);
+  bright=new Float32Array(nStars);
+  for(let i=0;i<nStars;i++) resetStar(i,true);
+  speedCur=speedTgt=P.speed;
+  commitAcc=0; slidePrev=0;
+  const now=performance.now();
+  nextMut=now+6000+Math.random()*4000;
+  nextImp=now+2500+Math.random()*3500;
+  nextCluster=now+9000+Math.random()*7000;
+}
+const MAX_STARS=900, MAX_TRAIL=48;
+const verts = new Float32Array(MAX_STARS*MAX_TRAIL*2*5);
+const pxA = new Float64Array(MAX_TRAIL), pyA = new Float64Array(MAX_TRAIL),
+      visA = new Uint8Array(MAX_TRAIL);
+
+/* ---------- frame ---------- */
+let last=performance.now(), fpsT=last, fpsN=0, msAcc=0, nextPal=last+8000;
+let phDrift=0;
+function frame(now){
+  const tFrame0 = performance.now();
+  const dtRaw = now-last; last=now;
+  if(on('autopal') && now>nextPal){ pickPalette(); nextPal=now+6000+Math.random()*4000; }
+  let dt = Math.min(dtRaw, 100);
+  let step = dt/REF_MS; step=Math.max(0.1,Math.min(3,step));
+  const dts = dt/1000;
+
+  if(P.stars!==nStars || P.trail!==nTrail) buildField();
+
+  /* --- mutations --- */
+  if(warpUntil && now>warpUntil){ speedTgt=P.speed; warpUntil=0; eventLabel=''; }
+  if(now>nextMut){
+    nextMut=now+6000+Math.random()*4000;
+    const c=(Math.random()*3)|0;
+    if(c===0){ speedTgt=P.speed*4; warpUntil=now+1500+Math.random()*700; eventLabel='WARP'; }
+    else if(c===1){ speedTgt=P.speed*0.15; warpUntil=now+2000+Math.random()*1200; eventLabel='DRIFT'; }
+  }
+  if(now>nextImp){
+    if(Math.random()<0.67) impY += (Math.random()*2-1)*0.022;
+    else impP += (Math.random()*2-1)*0.016;
+    nextImp = now+2500+Math.random()*3500;
+  }
+  if(now>nextCluster){
+    const a=Math.random()*6.2832, r=0.45+Math.random()*0.45;
+    clusterCx=Math.cos(a)*r; clusterCy=Math.sin(a)*r;
+    clusterUntil=now+2600; nextCluster=now+9000+Math.random()*7000;
+  }
+  clusterOn = now < clusterUntil;
+
+  /* --- flight: intent, spring-damper, coordinated bank --- */
+  ph[0]+=0.37*dts; ph[1]+=0.91*dts; ph[2]+=0.31*dts; ph[3]+=0.73*dts; ph[4]+=0.23*dts;
+  for(let i=0;i<5;i++) if(ph[i]>6.283185) ph[i]-=6.283185;
+  let yawI = YAW_AMP*(Math.sin(ph[0])+0.5*Math.sin(ph[1]))+impY;
+  let pitI = PITCH_AMP*(Math.sin(ph[2])+0.5*Math.sin(ph[3]))+impP;
+  if(clusterOn){ yawI += 0.010*clusterCx; pitI += 0.010*clusterCy; }
+  const dec=Math.min(0.9, 0.06*step); impY*=(1-dec); impP*=(1-dec);
+
+  const dampf=Math.exp(LN_DAMP*step), stiff=STIFF*step;
+  yawV = yawV*dampf + (yawI-yawR)*stiff;  yawR += yawV*step;
+  pitchV = pitchV*dampf + (pitI-pitchR)*stiff; pitchR += pitchV*step;
+  const rollI = -yawR*P.bank + ROLL_AMP*Math.sin(ph[4]);
+  rollV = rollV*dampf + (rollI-rollR)*stiff;  rollR += rollV*step;
+
+  speedCur += (speedTgt-speedCur)*(0.04*step);
+  let gf = 1 - GF_K*(Math.abs(yawR)+Math.abs(pitchR));
+  if(gf<GF_MIN) gf=GF_MIN;
+  const adv = speedCur*step*gf;
+
+  const cy=Math.cos(yawR*step), sy=Math.sin(yawR*step);
+  const cp=Math.cos(pitchR*step), sp2=Math.sin(pitchR*step);
+  const cr=Math.cos(rollR*step), sr=Math.sin(rollR*step);
+
+  /* --- sliding tail --- */
+  const slideG = (commitAcc/P.commit)*256 % 256;
+  if(P.slide){
+    for(let i=0;i<nStars;i++){
+      const sl = P.stagger ? (((slideG - (i%GROUPS)*(256/GROUPS))%256)+256)%256 : slideG;
+      const t = sl/256;
+      const b=i*nTrail*3, h=heads[i];
+      const o=b+(((h+nTrail-1)%nTrail))*3, s=b+(((h+nTrail-2+nTrail)%nTrail))*3;
+      rings[o]   = tails[i*3]   + (rings[s]  -tails[i*3]  )*t;
+      rings[o+1] = tails[i*3+1] + (rings[s+1]-tails[i*3+1])*t;
+      rings[o+2] = tails[i*3+2] + (rings[s+2]-tails[i*3+2])*t;
+    }
+  }
+
+  /* --- rotate + advance --- */
+  for(let i=0;i<nStars;i++){
+    const b=i*nTrail*3;
+    const lo = P.freeze ? heads[i] : -1;   // -1 => rotate every slot (the bug)
+    for(let k=0;k<nTrail;k++){
+      if(lo>=0 && k!==lo) continue;
+      const o=b+k*3;
+      let x=rings[o], y=rings[o+1], z=rings[o+2];
+      let tx=x*cy - z*sy, tz=x*sy + z*cy; x=tx; z=tz;
+      let ty=y*cp - z*sp2; tz=y*sp2 + z*cp; y=ty; z=tz;
+      tx=x*cr - y*sr; ty=x*sr + y*cr; x=tx; y=ty;
+      rings[o]=x; rings[o+1]=y; rings[o+2]=z;
+    }
+    const o=b+heads[i]*3;
+    const z = rings[o+2]-adv;
+    if(z<Z_NEAR || z>Z_FAR){ resetStar(i,false); continue; }
+    rings[o+2]=z;
+    let br = DIM_K/z/255; if(br>1) br=1; else if(br<DIM_MIN/255) br=DIM_MIN/255;
+    bright[i]=br;
+  }
+
+  /* --- commit, staggered --- */
+  commitAcc += dt;
+  if(commitAcc>=P.commit) commitAcc -= P.commit*Math.floor(commitAcc/P.commit);
+  const slideNow = ((commitAcc/P.commit)*256)&255;
+  const advS = ((slideNow - slidePrev)%256+256)%256;
+  if(advS){
+    for(let g=0; g<(P.stagger?GROUPS:1); g++){
+      const phase = P.stagger ? g*(256/GROUPS) : 0;
+      if((((phase - slidePrev - 1)%256)+256)%256 < advS){
+        for(let i=(P.stagger?g:0); i<nStars; i+=(P.stagger?GROUPS:1)){
+          const b=i*nTrail*3, h=heads[i], nh=(h-1+nTrail)%nTrail;
+          rings[b+nh*3]=rings[b+h*3];
+          rings[b+nh*3+1]=rings[b+h*3+1];
+          rings[b+nh*3+2]=rings[b+h*3+2];
+          heads[i]=nh;
+          const old=b+((nh+nTrail-1)%nTrail)*3;
+          tails[i*3]=rings[old]; tails[i*3+1]=rings[old+1]; tails[i*3+2]=rings[old+2];
+        }
+      }
+    }
+  }
+  slidePrev = slideNow;
+
+  /* --- project + emit line segments --- */
+  phDrift = (phDrift + P.drift*dts) % LUTN;
+  const RW=P.rw, RH=P.rh, hx=RW*0.5, hy=RH*0.5, f=P.focal;
+  let vi=0, segs=0;
+  const px=pxA, py=pyA, vis=visA;
+  for(let i=0;i<nStars;i++){
+    const b=i*nTrail*3, h=heads[i], br=bright[i];
+    const phBase = (phDrift + (P.perstar ? (i*P.spread*LUTN/nStars) : 0))|0;
+    for(let j=0;j<nTrail;j++){
+      const o=b+((h+j)%nTrail)*3, z=rings[o+2];
+      if(z<Z_NEAR){ vis[j]=0; continue; }
+      px[j]=f*rings[o]/z+hx; py[j]=f*rings[o+1]/z+hy; vis[j]=1;
+    }
+    // total length first: gradient is distance along the whole path
+    let total=0;
+    for(let j=0;j<nTrail-1;j++){
+      if(!vis[j]||!vis[j+1]) continue;
+      const ddx=px[j+1]-px[j], ddy=py[j+1]-py[j];
+      total += Math.sqrt(ddx*ddx+ddy*ddy);
+    }
+    if(total<=0) continue;
+    let cum=0;
+    for(let j=0;j<nTrail-1;j++){
+      if(!vis[j]||!vis[j+1]) continue;
+      const ddx=px[j+1]-px[j], ddy=py[j+1]-py[j];
+      const L=Math.sqrt(ddx*ddx+ddy*ddy);
+      let g0=((cum/total*(LUTN-1))|0)+phBase, g1=(((cum+L)/total*(LUTN-1))|0)+phBase;
+      g0=((g0%LUTN)+LUTN)%LUTN; g1=((g1%LUTN)+LUTN)%LUTN;
+      cum+=L;
+      // clip-space, y down -> up
+      verts[vi++]=px[j]/hx-1;   verts[vi++]=1-py[j]/hy;
+      verts[vi++]=LUT[g0*3]*br;   verts[vi++]=LUT[g0*3+1]*br; verts[vi++]=LUT[g0*3+2]*br;
+      verts[vi++]=px[j+1]/hx-1; verts[vi++]=1-py[j+1]/hy;
+      verts[vi++]=LUT[g1*3]*br;   verts[vi++]=LUT[g1*3+1]*br; verts[vi++]=LUT[g1*3+2]*br;
+      segs++;
+    }
+  }
+
+  /* --- draw --- */
+  if(cv.width!==RW || cv.height!==RH){ cv.width=RW; cv.height=RH; }
+  gl.viewport(0,0,RW,RH);
+  gl.blendFunc(gl.ONE, P.additive?gl.ONE:gl.ZERO);
+  gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+  if(segs){
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    if(vi>glCap){ glCap=verts.length;
+      gl.bufferData(gl.ARRAY_BUFFER, verts.byteLength, gl.DYNAMIC_DRAW); }
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts.subarray(0,vi));
+    gl.vertexAttribPointer(aP,2,gl.FLOAT,false,20,0);
+    gl.vertexAttribPointer(aC,3,gl.FLOAT,false,20,8);
+    gl.drawArrays(gl.LINES,0,segs*2);
+  }
+
+  fpsN++; msAcc += performance.now()-tFrame0;
+  if(now-fpsT>500){
+    document.getElementById('rFps').textContent=Math.round(fpsN*1000/(now-fpsT));
+    document.getElementById('rMs').textContent=(msAcc/fpsN).toFixed(2);
+    msAcc=0;
+    document.getElementById('rSeg').textContent=segs;
+    document.getElementById('rLit').textContent='~'+Math.round(segs*1.7);
+    document.getElementById('rEvent').textContent=eventLabel;
+    fpsT=now; fpsN=0;
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- wire up ---------- */
+Object.values(el).forEach(e=>{
+  if(!e||!e.addEventListener) return;
+  e.addEventListener('input', ()=>{ readControls(); bakeLUT(); });
+  e.addEventListener('change', ()=>{ readControls(); bakeLUT(); });
+});
+el.reset.addEventListener('click', ()=>{ readControls(); buildField(); });
+el.nextpal.addEventListener('click', pickPalette);
+
+el.pal.addEventListener('change', ()=>{ curStops=null; curName=''; bakeLUT(); });
+let idleT=null;
+function wake(){
+  document.body.classList.remove('idle');
+  clearTimeout(idleT);
+  idleT=setTimeout(()=>document.body.classList.add('idle'), 3200);
+}
+['mousemove','pointerdown','keydown','wheel'].forEach(e=>
+  addEventListener(e, wake, {passive:true}));
+addEventListener('resize', ()=>{ readControls(); });
+
+readControls(); bakeLUT(); buildField(); wake();
+requestAnimationFrame(frame);
+</script>
