@@ -162,17 +162,6 @@ respond. Watch the boot messages with:
 mpremote connect /dev/cu.usbmodem114301
 ```
 
-**There's a folder called `*` on the board.**
-Harmless, and nothing uses it. It gets created when a wildcard in an `mpremote`
-command isn't quoted properly. To remove it:
-
-```sh
-mpremote connect /dev/cu.usbmodem114301 fs rmdir ':lib/*'
-```
-
-Keep the quotes, or your shell will try to expand the `*` before mpremote sees
-it.
-
 **An effect looks wrong on my board.**
 Some are designed for a square panel and are skipped on the Galactic's wide
 strip. If one still looks off, it's a bug — worth reporting.
@@ -199,6 +188,3 @@ def deinit(): ...    # release anything init() allocated
 Copy it across and it appears in the rotation. `deinit()` matters — memory on
 these boards is tight, and whatever you allocate must be released when the
 effect is swapped out.
-
-For how the 3D line renderer in `lib/` works, and the conventions for changing
-it, see **[DEVELOPMENT.md](DEVELOPMENT.md)**.
